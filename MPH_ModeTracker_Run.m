@@ -15,16 +15,21 @@ function output = MPH_ModeTracker_Run(varargin)
 % --------------------------------------------------------------------------------------------------------------------------------------
 % NAME-VALUE PAIR PARAMETERS:
 % 'mph'               <Default: prompts user>        String of full path to mph file Default: prompts user for file name
-% 'lambda_search'     <Default: taken from model>    Starting 'search around' for eigenvalue
-% 'savedat'           <Default: ''>                  String specifying .mat file name in which results are saved
-% 'savedir'           <Default: './data/'>           String specifying directory in which .mat results are saved
-% 'mode_rules'        <Default: DEFAULT_MODE_RULES>  Cell array specifying result-validation rules pairs
+% 'lambda_search'     <Default: taken from model>    Initial 'search around target' for eigenvalue
+% 'savedat'           <Default: ''>                  String specifying .mat file name in which results will be saved
+% 'savedir'           <Default: './data/'>           String specifying directory in which .mat results will be saved
+% 'mode_rules'        <Default: DEFAULT_MODE_RULES>  Cell array specifying result-validation rule pairs
 % 'eval'              <Default: empty cell array>    Cell array of strings specifying results to evaluate with mphglobal()
 % 'num_pts'           <Default: 3>                   Number of interpolation points to use when transitioning to new parameter values
-% 'save_fields'       <Default: 0>                   If 1, Field patterns are saved as .png files for every frequency point
+% 'save_fields'       <Default: 0>                   If 1, Field patterns are saved as .png files for every single frequency point
 % 'silent'            <Default: 0>                   If 1, Pushover.net notifications are disabled
 % 'unattended_param'  <Default: 1>                   If 0, GUI props user to visually evaluate mode for each transition parameter value
 % 'unattended_freq'   <Default: 1>                   If 0, Same as 'unattended_param' but prompts for EVERY frequency value
+% 'freq_start'        <Default: Element 1 of freqs>  Specifies the frequency at which the mode should begin tracking (should be within
+%                                                    the range of freqs). Ideally the loaded model will have its solutionas at this
+%                                                    frequency.
+% 'port'              <Default: 2036>                COMSOL server port
+% 'ip'                <Default: '127.0.0.1'>         COMSOL server ip address
 %
 % --------------------------------------------------------------------------------------------------------------------------------------
 % OUTPUT STRUCTURE: 
@@ -43,9 +48,9 @@ function output = MPH_ModeTracker_Run(varargin)
 % particular mode across many frequencies by updating the 'search for modes around' value. This has been observed to be most useful with
 % plasmonic structures. The "mode tracking" process boils down to using a previously solved eigenvalue as the 'search for modes around' 
 % value. This is updated at each frequency to provide the best results. We have historically used two solvers within the  COMSOL model,
-% which each using the other's solution as its starting point, though this is not required so long as the search around value is updated
-% for each frequency. The "mode tracking" process can be performed across other parameters in addition to frequency. e.g for studying a
-% mode's performance as a function of geometric parameters. This function handles all of this functionality. 
+% which each using the other's solution as its starting point. However, two solvers are not required so long as the search around value
+% is updated for each frequency. The "mode tracking" process can be performed across other parameters in addition to frequency. e.g for
+% studying a mode's performance as a function of one or more geometric parameters.
 % 
 % --------------------------------------------------------------------------------------------------------------------------------------
 % USAGE:
@@ -60,8 +65,11 @@ function output = MPH_ModeTracker_Run(varargin)
 %   two solvers is automatically detected by this functions so long as the
 %   tag names are correct.
 %
-% - The currently stored solution(s) must be at the starting frequency of the
-%   sweep, i.e. freqs(1)
+% - The currently stored solution(s) in the model file must be at the starting frequency
+%   of the sweep, i.e. The first element of freqs (or 'freq_start' if
+%   specified). If this is not the case, 'lambda_start' should be given to
+%   override the value from the model. Additionally, 'num_pts' should be
+%   set to 2.
 % --------------------------------------------------------------------------------------------------------------------------------------
 
 import com.comsol.model.*
@@ -89,6 +97,7 @@ addParamValue(inparser,'save_fields',0,@isnumeric);
 addParamValue(inparser,'silent',0,@isnumeric);
 addParamValue(inparser,'unattended_param',1,@isnumeric);
 addParamValue(inparser,'unattended_freq',1,@isnumeric);
+addParamValue(inparser,'freq_start',nan,@isnumeric);
 addParamValue(inparser,'port',2036,@isnumeric);
 addParamValue(inparser,'ip','127.0.0.1',@ischar);
 parse(inparser,varargin{:});
@@ -148,13 +157,6 @@ while 1
             %% ---
             COMSOLSlvrMgr=MPH_ModeTracker_COMSOLSolverMgr(2);
             COMSOLSlvrMgr.detectSolvers(m);
-            
-            lambda_search=in.lambda_search;
-            if isnan(lambda_search) % if not specified, pull from model
-                tmpev = m.param.evaluateComplex('lambda_search');
-                lambda_search = tmpev(1) + 1j*tmpev(2);
-            end
-            
             param_names   = fieldnames(in.sweep);
             N_param_names = length( param_names );
             N_param_vals  = length(in.sweep.( param_names{1} ));
@@ -172,11 +174,23 @@ while 1
             
         case MPH_ModeTracker_State.NewParam
             %% ---
-            freqs_working=in.freqs;
+            if isnan(in.freq_start)
+                freqs_working=in.freqs;
+            else
+                [~, freq_start_ind] = min(abs( in.freqs-in.freq_start ));
+                freqs_working = [ ...
+                    in.freqs(freq_start_ind:length(in.freqs)),...
+                    fliplr(in.freqs(1:freq_start_ind-1)) ];
+            end
             f=1;
             t=1;
             if ~exist('p','var') %first param set
                 p=1;
+                lambda_search=in.lambda_search;
+                if isnan(lambda_search) % if not specified, pull from model
+                    tmpev = m.param.evaluateComplex('lambda_search');
+                    lambda_search = tmpev(1) + 1j*tmpev(2);
+                end
             else %second or later param sets
                 p=p+1;
                 lambda_search=output.lambda{p-1}(f); %rewind frequency
@@ -241,6 +255,8 @@ while 1
             f=f+1;
             if f <= length(freqs_working)
                 StateMgr.next=MPH_ModeTracker_State.RunFreq;
+                [~,freqs_solved_closest_ind]=min(abs( freqs_working(f)-output.freqs{p} ));
+                lambda_search = output.lambda{p}(freqs_solved_closest_ind);
             else
                 StateMgr.next=MPH_ModeTracker_State.NewParam;
             end
@@ -328,12 +344,13 @@ while 1
                 save(mat_savename,unique_output_var_name,'output');
                 
                 StateMgr.next=MPH_ModeTracker_State.StepFreq;
+                lambda_search=lambda_computed;
             else
                 StateMgr.next=MPH_ModeTracker_State.StepParam;
+                lambda_search=lambda_computed;
             end
             
             StateMgr.resetRetries();
-            lambda_search=lambda_computed;
             COMSOLSlvrMgr.step(); % Always use the next solver
             
         case MPH_ModeTracker_State.Retry
@@ -368,13 +385,15 @@ while 1
                 end
             else % FREQ
                 if f > 1
-                    new_local_freq = freqs_working(f-1)+(freqs_working(f)-freqs_working(f-1))/2;
+                    [~, freqs_solved_closest_ind] = min(abs( freqs_working(f)-output.freqs{p} ));
+                    freqs_solved_closest=output.freqs{p}( freqs_solved_closest_ind );
+                    new_midpt_freq = freqs_solved_closest+(freqs_working(f)-freqs_solved_closest)/2;
                     if StateMgr.retries==1 % On first retry we insert new frequency
-                        freqs_working=[freqs_working(1:f-1), new_local_freq, freqs_working(f:length(freqs_working))];
+                        freqs_working=[freqs_working(1:f-1), new_midpt_freq, freqs_working(f:length(freqs_working))];
                     else % On second or later retry we don't need to "grow" the array, just insert over freq of previous retry/retries
-                        freqs_working(f)=new_local_freq;
+                        freqs_working(f)=new_midpt_freq;
                     end
-                    fprintf(['Retry %d/%d at interpolated frequency (',FMT_FREQUENCY,') after failure at ''%s''\n'],StateMgr.retries,StateMgr.retriesMax,new_local_freq,char(StateMgr.last));
+                    fprintf(['Retry %d/%d at interpolated frequency (',FMT_FREQUENCY,') after failure at ''%s''\n'],StateMgr.retries,StateMgr.retriesMax,new_midpt_freq,char(StateMgr.last));
                     StateMgr.next=MPH_ModeTracker_State.RunFreq;
                 else
                     fprintf('(!) Can''t attempt to retry at first freq!\n');
