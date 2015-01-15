@@ -1,38 +1,73 @@
 function output = MPH_ModeTracker_Run(varargin)
-% output = MPH_ModeTracker_Run(varargin)
+% output = MPH_ModeTracker_Run(sweep,freqs,varargin)
+% --------------------------------------------------------------------------------------------------------------------------------------
+% POSITIONAL PARAMETERS: 
+% sweep    (struct) specifies comsol parameter combinations that will be swept
+%          NOTE: we have assumed that each parameter to be swept has an equivalent
+%          number of values as all other parameters that are to be swept.
+%          i.e.   sweep.a = [1 2 3 4];
+%                 sweep.b = [5 6 7 8];  results in the combinations being simulated:
+%                 (a,b)=(1,5),(2,6),(3,7),(4,8)
+%                 Where 'a' and 'b' correspond to parameters in the COMSOL model.
 %
-% Parameters:
-% sweep (struct) specifies comsol parameter combinations that will be swept
-% freqs (array)
+% freqs    (array)
 %
-% Parameter-value pairs:
-% 'mph', string of full path to comsol model file
-% 'lambda_search', complex number specifying starting lambda_search. taken from model if not specified
-% 'savedat',['']
-% 'savedir',['./data/']
-% 'mode_rules', [{'lambda', @(x) x>1; 'lambda', @(x) abs(imag(x))<=1.01*abs(real(x))}]
-% 'eval', []
-% 'num_pts', [3]
-% 'save_fields', [0]
-% 'silent', [0]
-% 'unattended_param', [1]
-% 'unattended_freq', [1]
+% --------------------------------------------------------------------------------------------------------------------------------------
+% NAME-VALUE PAIR PARAMETERS:
+% 'mph'               <Default: prompts user>        String of full path to mph file Default: prompts user for file name
+% 'lambda_search'     <Default: taken from model>    Starting 'search around' for eigenvalue
+% 'savedat'           <Default: ''>                  String specifying .mat file name in which results are saved
+% 'savedir'           <Default: './data/'>           String specifying directory in which .mat results are saved
+% 'mode_rules'        <Default: DEFAULT_MODE_RULES>  Cell array specifying result-validation rules pairs
+% 'eval'              <Default: empty cell array>    Cell array of strings specifying results to evaluate with mphglobal()
+% 'num_pts'           <Default: 3>                   Number of interpolation points to use when transitioning to new parameter values
+% 'save_fields'       <Default: 0>                   If 1, Field patterns are saved as .png files for every frequency point
+% 'silent'            <Default: 0>                   If 1, Pushover.net notifications are disabled
+% 'unattended_param'  <Default: 1>                   If 0, GUI props user to visually evaluate mode for each transition parameter value
+% 'unattended_freq'   <Default: 1>                   If 0, Same as 'unattended_param' but prompts for EVERY frequency value
 %
-% Additional information:
+% --------------------------------------------------------------------------------------------------------------------------------------
+% OUTPUT STRUCTURE: 
+% Input echo:        output.inputs
+% Results:           output.freqs{parameter value}(frequency)
+%                    output.lambda{parameter value}(frequency)
+%                    output.user_specified_eval_1{parameter value}(frequency)
+%                    output.user_specified_eval_2{parameter value}(frequency)
+%                    output.        ...          {parameter value}(frequency)
+%                    output.user_specified_eval_N{parameter value}(frequency)
+% COMSOL model ptr:  output.m
+%  
+% --------------------------------------------------------------------------------------------------------------------------------------
+% BACKGROUND:
+% This function automates what we (some members of our research group) have come to call "mode tracking". This refers to solving for a 
+% particular mode across many frequencies by updating the 'search for modes around' value. This has been observed to be most useful with
+% plasmonic structures. The "mode tracking" process boils down to using a previously solved eigenvalue as the 'search for modes around' 
+% value. This is updated at each frequency to provide the best results. We have historically used two solvers within the  COMSOL model,
+% which each using the other's solution as its starting point, though this is not required so long as the search around value is updated
+% for each frequency. The "mode tracking" process can be performed across other parameters in addition to frequency. e.g for studying a
+% mode's performance as a function of geometric parameters. This function handles all of this functionality. 
+% 
+% --------------------------------------------------------------------------------------------------------------------------------------
+% USAGE:
+% The end user of this function simply needs to supply an mph file and a set of parameter combinations at which the model should be
+% solved. The details of the parameter inputs are specified above. This function will handle transitioning from the current solutions to
+% ones at the specified frequencies and parameter values.
+% 
+% Additional notes
 % - At least one solver must exist within the mph model (given by the default tag
 %   'sol1'). If a second solver exists, and is active, it must be given by the tag
 %   'sol2' (which again, is the default from COMSOL). The case of one or
-%   two solvers is automatically detected by the functions so long as the
+%   two solvers is automatically detected by this functions so long as the
 %   tag names are correct.
 %
 % - The currently stored solution(s) must be at the starting frequency of the
-%   sweep
+%   sweep, i.e. freqs(1)
+% --------------------------------------------------------------------------------------------------------------------------------------
 
 import com.comsol.model.*
 import com.comsol.model.util.*
 
 %% Constants
-DEFAULT_NUM_TRANS_POINTS = 3;
 FMT_CMPLX='%+.4f%+.4fj';
 FMT_FREQUENCY='%.3E';
 DEFAULT_MODE_RULES={...
@@ -40,7 +75,7 @@ DEFAULT_MODE_RULES={...
     'lambda', @(x) abs(imag(x))<=1.01*abs(real(x))};
 
 %% Parse inputs
-inparser=inputParser;
+inparser=inputParser;   
 addRequired(inparser,'sweep',@isstruct);
 addRequired(inparser,'freqs',@isnumeric);
 addParamValue(inparser,'mph','',@ischar);
@@ -49,7 +84,7 @@ addParamValue(inparser,'savedat','',@ischar);
 addParamValue(inparser,'savedir','./data/',@ischar);
 addParamValue(inparser,'mode_rules',DEFAULT_MODE_RULES,@iscell);
 addParamValue(inparser,'eval',cell(1,0),@iscell);
-addParamValue(inparser,'num_pts',DEFAULT_NUM_TRANS_POINTS,@isnumeric);
+addParamValue(inparser,'num_pts',3,@isnumeric);
 addParamValue(inparser,'save_fields',0,@isnumeric);
 addParamValue(inparser,'silent',0,@isnumeric);
 addParamValue(inparser,'unattended_param',1,@isnumeric);
@@ -117,11 +152,7 @@ while 1
             param_names   = fieldnames(in.sweep);
             N_param_names = length( param_names );
             N_param_vals  = length(in.sweep.( param_names{1} ));
-            % NOTE: we have assumed that each parameter to be swept has an equivalent
-            % number of values as all other parameters that are to be swept.
-            % i.e.   sweep.a = [1 2 3 4];
-            %        sweep.b = [5 6 7 8];  results in the combinations being simulated:
-            %        (a,b)=(1,5),(2,6),(3,7),(4,8)
+
             param_vals_current = NaN(N_param_names,1);
             param_vals_future  = NaN(N_param_names,N_param_vals);
             for n=1:N_param_names
@@ -282,8 +313,8 @@ while 1
                 fprintf('Saving ');
                 if in.save_fields==1
                     fprintf('field patterns, ');
-                    freq_text=sprintf('freq=%.2e',freqs_working(f));
-                    param_text=sprintf('p=%d',p);
+                    freq_text=sprintf('f%.5G',freqs_working(f));
+                    param_text=sprintf('p%02d',p);
                     plotCOMSOLPlotGroup(m,COMSOLSlvrMgr.plotgroup_tag(), fullfile(mat_savename,['/',param_text,'_',freq_text]) );
                 end
                 fprintf('result data...\n');
