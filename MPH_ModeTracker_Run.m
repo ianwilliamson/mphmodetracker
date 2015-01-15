@@ -89,6 +89,7 @@ addParamValue(inparser,'save_fields',0,@isnumeric);
 addParamValue(inparser,'silent',0,@isnumeric);
 addParamValue(inparser,'unattended_param',1,@isnumeric);
 addParamValue(inparser,'unattended_freq',1,@isnumeric);
+addParamValue(inparser,'port',2036,@isnumeric);
 parse(inparser,varargin{:});
 in=inparser.Results;
 
@@ -111,7 +112,7 @@ while 1
             %% ---
             % Comsol
             try
-                mphstart();
+                mphstart(in.port);
                 ModelUtil.showProgress(true);
                 fprintf('(#) Successfully connected to COMSOL\n');
                 [m,in.mph] = mphload_enhanced(in.mph);
@@ -131,6 +132,10 @@ while 1
             
             fprintf('(#) Results saved to ''%s''\n',mat_savename);
             fprintf('(#) Unique output variable name is ''%s''\n',unique_output_var_name);
+            
+            if ~exist(fileparts(mat_savename),'dir')
+                mkdir(fileparts(mat_savename));
+            end
             
             % Pushover.net notifications
             PN=PushoverNotifier(in.savedat);
