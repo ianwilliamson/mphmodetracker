@@ -90,6 +90,7 @@ addParamValue(inparser,'silent',0,@isnumeric);
 addParamValue(inparser,'unattended_param',1,@isnumeric);
 addParamValue(inparser,'unattended_freq',1,@isnumeric);
 addParamValue(inparser,'port',2036,@isnumeric);
+addParamValue(inparser,'ip','127.0.0.1',@ischar);
 parse(inparser,varargin{:});
 in=inparser.Results;
 
@@ -112,7 +113,7 @@ while 1
             %% ---
             % Comsol
             try
-                mphstart(in.port);
+                mphstart(in.ip,in.port);
                 ModelUtil.showProgress(true);
                 fprintf('(#) Successfully connected to COMSOL\n');
                 [m,in.mph] = mphload_enhanced(in.mph);
