@@ -233,6 +233,15 @@ while 1
             else
                 StateMgr.mode=MPH_ModeTracker_SweepMode.Freq;
                 StateMgr.next=MPH_ModeTracker_State.Extract;
+                COMSOLSlvrMgr.step(); % This is technically stepping back
+                                      % (despite the name of the function).        
+                                      % This is done so that we can use the
+                                      % correct solution for extract step.
+                                      % We're basically un doing the call
+                                      % to COMSOLSlvrMgr.step(); while we
+                                      % were in
+                                      % MPH_ModeTracker_SweepMode.Param
+                                      % mode
             end
             
         case MPH_ModeTracker_State.RunParam
