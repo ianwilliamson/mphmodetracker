@@ -91,6 +91,7 @@ addParamValue(inparser,'lambda_search',nan,@isnumeric);
 addParamValue(inparser,'savedat','',@ischar);
 addParamValue(inparser,'savedir','./data/',@ischar);
 addParamValue(inparser,'mode_rules',DEFAULT_MODE_RULES,@iscell);
+addParamValue(inparser,'max_retries',8,@isnumeric);
 addParamValue(inparser,'eval',cell(1,0),@iscell);
 addParamValue(inparser,'num_pts',3,@isnumeric);
 addParamValue(inparser,'save_fields',0,@isnumeric);
@@ -114,7 +115,7 @@ output.time=clock();
 % p - current parameter value set index
 % t - current parameter value set transition index
 
-StateMgr=MPH_ModeTracker_StateMgr();
+StateMgr=MPH_ModeTracker_StateMgr(in.max_retries);
 while 1
     doStateTransition(StateMgr);
     switch StateMgr.current
@@ -369,6 +370,19 @@ while 1
                 fprintf('(!) Reached maximum number of retries\n');
                 PN.ErrorNotify('Reached maximum number of retries');
                 StateMgr.next=MPH_ModeTracker_State.NewParam;
+                
+                if isFreqTrackActive(StateMgr.mode) % This handles the case where we run out of retries and want to go in the other direction (if we've started somewhere in the middle of our frequency range)
+                    ind_more_than = find( freqs_working(f+1:length(freqs_working))>freqs_working(f) );
+                    ind_less_than = find( freqs_working(f+1:length(freqs_working))<freqs_working(f) );
+                    if ( ~isempty(ind_more_than) || f==length(freqs_working) ) && ~isempty(ind_less_than)
+                        freqs_working = [freqs_working(1:f-1), freqs_working(f+ind_less_than(1):length(freqs_working))];
+                        StateMgr.next=MPH_ModeTracker_State.StepFreq;
+                        f=f-1;
+                        fprintf('(#) Going to continue sweeping lower frequncies\n');
+                    end
+                end
+                
+                StateMgr.resetRetries(); % is this correct?
                 continue
             end
             

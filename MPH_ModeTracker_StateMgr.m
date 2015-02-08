@@ -11,7 +11,10 @@ classdef MPH_ModeTracker_StateMgr < handle
         retriesGlobal=0;
     end
     methods
-        function SM = MPH_ModeTracker_StateMgr()
+        function SM = MPH_ModeTracker_StateMgr(varargin)
+            if ~isempty(varargin)
+                SM.retriesMax=varargin{1};
+            end
             SM.next=MPH_ModeTracker_State.Start;
             SM.current=MPH_ModeTracker_State.Start;
         end
